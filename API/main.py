@@ -284,7 +284,7 @@ def read_data(db: Session = Depends(get_db)):
     ids = get_all_record_ids(db)
 
     return [get_modeldata(get_data(db, x[0])) for x in ids]
-
+#da
 
 def delete_data(db: Session, record_id: int):
     record = get_data(db, record_id)
