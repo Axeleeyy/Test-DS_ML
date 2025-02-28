@@ -8,8 +8,7 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
-    class Config:
-        orm_mode = True
+    
 
 class UserRequestCreate(BaseModel):
     request_data: str
@@ -20,8 +19,7 @@ class UserRequestResponse(BaseModel):
     user_id: int 
     request_data:str
     result_data: int
-    class Config:
-        orm_mode = True
+    
 
 class InputData(BaseModel):
     Id: int

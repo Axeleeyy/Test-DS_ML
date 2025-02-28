@@ -6,10 +6,9 @@ from typing import List
 import models
 import joblib
 from pandas import DataFrame
-from models import Base, ModelData
+from models import Base, InputData, UserRequest, User
 from auth import router as auth_router  
-from auth import oauth2_scheme
-
+from auth import oauth2_scheme, get_current_user
 
 
 app = FastAPI(title='Predict Model')
@@ -43,8 +42,7 @@ def get_data(db: Session, record_id: int):
     """
     getting modeldata
     """
-
-    return db.query(ModelData).filter(ModelData.id == record_id).first()
+    return db.query(UserRequest).filter(UserRequest.id == record_id).first()
 
 def get_df(data: dict) -> dict:
     """
@@ -85,11 +83,13 @@ def predict_data(data: dict) -> int:
 
     return int(prediction)   #результат предсказания
 
-def save_data(db: Session, data: dict) -> int:
+def save_data(db: Session, data: dict, result: int, token: str = Depends(oauth2_scheme)) -> int:
     """
     saving a dict in db
     """
-    record = ModelData(
+    
+    current_user = get_current_user(token)
+    request = UserRequest(
         Elevation = int(data["Elevation"][0]),
         Aspect = int(data["Aspect"][0]),
         Slope = int(data["Slope"][0]),
@@ -102,16 +102,15 @@ def save_data(db: Session, data: dict) -> int:
         Horizontal_Distance_To_Fire_Points = int(data["Horizontal_Distance_To_Fire_Points"][0]),
         Wilderness_Area = int(data["Wilderness_Area"][0]),
         Soil_Type = int(data["Soil_Type"][0]),
-        Cover_Type = int(data["Cover_Type"][0])
+        result = result,
+        user_id = current_user.id
     )
 
-   
-    db.add(record)
-   
+    db.add(request)
     db.commit()
-    db.refresh(record)
+    db.refresh(request)
     
-    return record.id
+    return request.id
 
 
 @app.get("/predict", response_model=dict)
@@ -234,16 +233,14 @@ def predict(
     data = get_df(data)
     result = predict_data(data)
 
-    data['Cover_Type'] = [result]
-
-    id = save_data(db, data)
-
+    #data['Cover_Type'] = [result]
+    id = save_data(db, data, result, token)
 
     return {"id": id, "result": result}
 
-def get_modeldata(record: ModelData):
+def get_modeldata(record: UserRequest):
     """
-    getting a dictionary with data
+    getting a dictionary with input and result
     """
     data = {
         "id": record.id,
@@ -259,15 +256,19 @@ def get_modeldata(record: ModelData):
         "Horizontal_Distance_To_Fire_Points": record.Horizontal_Distance_To_Fire_Points,
         "Wilderness_Area": record.Wilderness_Area,
         "Soil_Type": record.Soil_Type,
-        "Cover_Type": record.Cover_Type
+        "Cover_Type": record.result
     }
     return data
 
-
+def get_user_record_ids(db: Session, user_id: int) -> list:
+    return [record.id for record in db.query(UserRequest).filter(UserRequest.user_id == user_id).all()]
 
 @app.get("/data/{record_id}", response_model=dict)
-def read_data_by_id(record_id: int, db: Session = Depends(get_db)):
-    record = get_data(db, record_id)
+def read_data_by_id(record_id: int, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    if record_id in get_user_record_ids(db, get_current_user(token).id):
+        record = get_data(db, record_id)
+    else:
+        record = None
     if record is None:
         raise HTTPException(status_code=404, detail="Record not found")
 
@@ -275,19 +276,16 @@ def read_data_by_id(record_id: int, db: Session = Depends(get_db)):
 
     return data
 
-def get_all_record_ids(db: Session):
-    return db.query(ModelData.id).all()
-
 
 @app.get("/data", response_model=list)
-def read_data(db: Session = Depends(get_db)):
-    ids = get_all_record_ids(db)
+def read_data(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    current_user = get_current_user(token)
+    ids = get_user_record_ids(db, current_user.id)
+    return [get_modeldata(get_data(db, x)) for x in ids]
 
-    return [get_modeldata(get_data(db, x[0])) for x in ids]
 
-
-def delete_data(db: Session, record_id: int):
-    record = get_data(db, record_id)
+def delete_request(db: Session, record_id: int, user_id: int) -> bool:
+    record = db.query(UserRequest).filter(UserRequest.id == record_id, UserRequest.user_id == user_id).first()
     if record:
         db.delete(record)
         db.commit()
@@ -295,8 +293,9 @@ def delete_data(db: Session, record_id: int):
     return False
 
 @app.delete("/data/{record_id}", response_model=dict)
-def delete_record(record_id: int, db: Session = Depends(get_db)):
-    success = delete_data(db, record_id)
+def delete_record(record_id: int, db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
+    current_user = get_current_user(token)
+    success = delete_request(db, record_id, current_user.id)
     if not success:
         raise HTTPException(status_code=404, detail="Record not found")
     return {"detail": "Record deleted successfully"}

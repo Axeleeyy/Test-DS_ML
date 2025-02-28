@@ -1,10 +1,4 @@
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-import datetime
-
-
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, APIRouter
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from database import SessionLocal
@@ -13,8 +7,7 @@ from schemas import UserCreate, UserResponse
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-
-
+import json
 router = APIRouter(tags=['auth'])
 
 SECRET_KEY = "SecretKey"
@@ -33,15 +26,39 @@ def verify_password(plain_password, hashed_password):
 
 # Создание токена
 def create_access_token(data: dict, expires_delta: timedelta = None):
-    to_encode = data.copy()
+    token_data = data.copy()
     if expires_delta:
         expire = datetime.now() + expires_delta
     else:
-        expire = datetime.now() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+        expire = datetime.now() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token_data.update({"exp": expire})
+    token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
+    return token # токен без шифрования
 
+# Декодирование токена
+def decode_jwt(token: str):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if "exp" in payload and datetime.fromtimestamp(payload["exp"]) < datetime.now():
+            raise credentials_exception
+        return payload
+    except JWTError:
+        raise credentials_exception
+
+# Получение текущего пользователя
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    db: Session = SessionLocal() 
+    payload = decode_jwt(token)  
+    user_name = payload['sub']  
+    user = db.query(User).filter(User.username == user_name).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 @router.post("/register", response_model=UserResponse)
 def register(user: UserCreate):
@@ -70,4 +87,3 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()):
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
-
